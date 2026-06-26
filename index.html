@@ -1552,21 +1552,28 @@
             return;
         }
 
+        let dailyConsolidated = {};
         let months = {};
 
         dbArchivedSales.forEach(cierre => {
             if (cierre.fecha) {
-                dWrap.innerHTML += `
-                    <tr class="hover:bg-gray-50 text-gray-700 font-medium border-b border-gray-100">
-                        <td class="p-2.5 font-bold text-gray-900">${cierre.fecha}</td>
-                        <td class="p-2.5 text-right font-bold text-green-700">S/ ${(cierre.efectivo || 0).toFixed(2)}</td>
-                        <td class="p-2.5 text-right font-bold text-blue-700">S/ ${(cierre.yape || 0).toFixed(2)}</td>
-                        <td class="p-2.5 text-right font-bold text-purple-700">S/ ${(cierre.tarjeta || 0).toFixed(2)}</td>
-                        <td class="p-2.5 text-right font-black text-orange-600 bg-orange-50/40">S/ ${(cierre.totalNeto || 0).toFixed(2)}</td>
-                    </tr>`;
+                const fecha = cierre.fecha;
+                if (!dailyConsolidated[fecha]) {
+                    dailyConsolidated[fecha] = { efectivo: 0, yape: 0, tarjeta: 0, totalNeto: 0, month: cierre.month };
+                }
+                dailyConsolidated[fecha].efectivo += (cierre.efectivo || 0);
+                dailyConsolidated[fecha].yape += (cierre.yape || 0);
+                dailyConsolidated[fecha].tarjeta += (cierre.tarjeta || 0);
+                dailyConsolidated[fecha].totalNeto += (cierre.totalNeto || 0);
                 
                 months[cierre.month] = (months[cierre.month] || 0) + (cierre.totalNeto || 0);
-            } else if (cierre.date) {
+            } 
+            else if (cierre.date) {
+                const fecha = cierre.date;
+                if (!dailyConsolidated[fecha]) {
+                    dailyConsolidated[fecha] = { efectivo: 0, yape: 0, tarjeta: 0, totalNeto: 0, month: cierre.month };
+                }
+                
                 let efe = 0, yape = 0, tar = 0;
                 if (cierre.paymentMethod === 'Efectivo') efe = cierre.total;
                 else if (cierre.paymentMethod === 'Yape/Plin') yape = cierre.total;
@@ -1576,17 +1583,25 @@
                     yape = cierre.splitDigitalAmt || 0;
                 }
 
-                dWrap.innerHTML += `
-                    <tr class="hover:bg-gray-50 text-gray-700 font-medium border-b border-gray-100">
-                        <td class="p-2.5 font-bold text-gray-500">${cierre.date} <span class="text-[9px] text-gray-400 font-normal">(Legacy)</span></td>
-                        <td class="p-2.5 text-right font-bold text-green-700/60">S/ ${efe.toFixed(2)}</td>
-                        <td class="p-2.5 text-right font-bold text-blue-700/60">S/ ${yape.toFixed(2)}</td>
-                        <td class="p-2.5 text-right font-bold text-purple-700/60">S/ ${tar.toFixed(2)}</td>
-                        <td class="p-2.5 text-right font-black text-orange-600/60">S/ ${cierre.total.toFixed(2)}</td>
-                    </tr>`;
+                dailyConsolidated[fecha].efectivo += efe;
+                dailyConsolidated[fecha].yape += yape;
+                dailyConsolidated[fecha].tarjeta += tar;
+                dailyConsolidated[fecha].totalNeto += cierre.total;
                 
                 months[cierre.month] = (months[cierre.month] || 0) + cierre.total;
             }
+        });
+
+        Object.keys(dailyConsolidated).forEach(fecha => {
+            const data = dailyConsolidated[fecha];
+            dWrap.innerHTML += `
+                <tr class="hover:bg-gray-50 text-gray-700 font-medium border-b border-gray-100">
+                    <td class="p-2.5 font-bold text-gray-900">${fecha}</td>
+                    <td class="p-2.5 text-right font-bold text-green-700">S/ ${data.efectivo.toFixed(2)}</td>
+                    <td class="p-2.5 text-right font-bold text-blue-700">S/ ${data.yape.toFixed(2)}</td>
+                    <td class="p-2.5 text-right font-bold text-purple-700">S/ ${data.tarjeta.toFixed(2)}</td>
+                    <td class="p-2.5 text-right font-black text-orange-600 bg-orange-50/40">S/ ${data.totalNeto.toFixed(2)}</td>
+                </tr>`;
         });
 
         Object.keys(months).forEach(m => {
