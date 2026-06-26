@@ -321,6 +321,7 @@
                                     <th class="p-3">Productos Liquidados</th>
                                     <th class="p-3">Pago</th>
                                     <th class="p-3 text-right">Total</th>
+                                    <th class="p-3 text-center">Acción</th>
                                 </tr>
                             </thead>
                             <tbody id="table-sales-today" class="divide-y divide-gray-100"></tbody>
@@ -339,7 +340,7 @@
             </div>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div class="md:col-span-2 bg-white p-4 rounded-xl shadow-sm border overflow-x-auto">
-                    <h4 class="font-bold text-gray-700 mb-3 text-xs uppercase tracking-wide"><i class="fa-solid fa-calendar-days text-blue-500 mr-1"></i> Acumulado por Fechas</h4>
+                    <h4 class="font-bold text-gray-700 mb-3 text-xs uppercase tracking-wide"><i class="fa-solid fa-calendar-days text-blue-500 mr-1"></i> Acumulado por Fechas (Haz clic para ver detalles)</h4>
                     <table class="w-full text-left border-collapse text-xs">
                         <thead>
                             <tr class="bg-gray-100 font-bold text-gray-600 uppercase border-b border-gray-200">
@@ -369,8 +370,7 @@
                     
                     <div class="bg-white p-4 rounded-xl shadow-sm border">
                         <h4 class="font-bold text-gray-700 mb-3 text-xs uppercase tracking-wide"><i class="fa-solid fa-fire text-orange-500 mr-1"></i> Top 5 Más Vendidos</h4>
-                        <div id="history-most-sold" class="space-y-3 text-xs">
-                            </div>
+                        <div id="history-most-sold" class="space-y-3 text-xs"></div>
                     </div>
                 </div>
             </div>
@@ -429,6 +429,18 @@
     </div>
 
 </main>
+
+<!-- MODAL DETALLE DE PRODUCTOS HISTORIAL -->
+<div id="modal-history-detail" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden p-4">
+    <div class="bg-white rounded-2xl shadow-2xl p-5 w-full max-w-sm">
+        <h3 id="history-detail-date" class="font-black text-gray-800 text-lg mb-2 flex items-center">
+            <i class="fa-solid fa-receipt text-orange-500 mr-2"></i> Ventas del Día: XX/XX/XXXX
+        </h3>
+        <p class="text-xs text-gray-500 mb-3 border-b pb-2">Lista consolidada de artículos despachados:</p>
+        <div id="history-detail-list" class="space-y-2 max-h-60 overflow-y-auto mb-4 pr-1"></div>
+        <button onclick="closeHistoryDetailModal()" class="w-full bg-gray-800 text-white font-bold py-2 rounded-xl text-sm shadow">Entendido</button>
+    </div>
+</div>
 
 <div id="modal-pin" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden p-4">
     <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm text-center">
@@ -682,6 +694,7 @@
     let currentSplitTotal = 0;
     let currentSplitItemsSelected = [];
     let globalActionPending = null;
+    let saleIdToCancel = null; // ID de venta a eliminar temporal
 
     let peer = null;
     let netRole = "none";
@@ -927,9 +940,8 @@
             let totalEfectivo = 0;
             let totalYape = 0;
             let totalTarjeta = 0;
-
-            // Conservar el desglose de productos vendidos en este turno dentro de un array plano para el historial
             let turnoProductsList = [];
+
             dbSales.filter(s => s.date === todayString).forEach(s => {
                 if (s.paymentMethod === 'Efectivo') totalEfectivo += s.total;
                 else if (s.paymentMethod === 'Yape/Plin') totalYape += s.total;
@@ -939,7 +951,6 @@
                     totalYape += (s.splitDigitalAmt || 0);
                 }
                 
-                // Mapear los strings del resumen de items (Ej: "2x Porción de Chicharrón, 1x Jarra Chicha")
                 if(s.itemsSummary) {
                     const parts = s.itemsSummary.replace(/\[Parcial\]\s*/g, "").split(", ");
                     parts.forEach(p => {
@@ -958,7 +969,7 @@
                 yape: totalYape,
                 tarjeta: totalTarjeta,
                 totalNeto: totalEfectivo + totalYape + totalTarjeta,
-                products: turnoProductsList // Guardamos los productos del día
+                products: turnoProductsList
             };
 
             dbArchivedSales.push(consolidadoDia);
@@ -1016,12 +1027,12 @@
     }
 
     function tryAccess(targetView) {
-        pendingViewAccess = targetView; globalActionPending = null; openPinModal();
+        pendingViewAccess = targetView; globalActionPending = null; saleIdToCancel = null; openPinModal();
     }
 
     let pinBuffer = "";
     function openPinModal() { pinBuffer = ""; document.getElementById("pin-display").value = ""; document.getElementById("modal-pin").classList.remove("hidden"); }
-    function closePinModal() { document.getElementById("modal-pin").classList.add("hidden"); pendingViewAccess = null; globalActionPending = null; }
+    function closePinModal() { document.getElementById("modal-pin").classList.add("hidden"); pendingViewAccess = null; globalActionPending = null; saleIdToCancel = null; }
     function pressPin(num) { if (pinBuffer.length < 4) { pointer=num; pinBuffer += num; document.getElementById("pin-display").value = "•".repeat(pinBuffer.length); } }
     function clearPin() { pinBuffer = ""; document.getElementById("pin-display").value = ""; }
 
@@ -1030,18 +1041,38 @@
             document.getElementById("modal-pin").classList.add("hidden");
             if (pendingViewAccess) { switchTab(pendingViewAccess); pendingViewAccess = null; }
             else if (globalActionPending === "clear_history") { executeClearHistoryAction(); }
+            else if (globalActionPending === "cancel_sale" && saleIdToCancel) { executeCancelSaleAction(); }
         } else { alert("❌ PIN Incorrecto."); clearPin(); }
     }
 
     function clearAllArchivedHistory() {
         if (confirm("🚨 ¿Eliminar historial completo de cierres archivados?")) {
-            pendingViewAccess = null; globalActionPending = "clear_history"; openPinModal();
+            pendingViewAccess = null; globalActionPending = "clear_history"; saleIdToCancel = null; openPinModal();
         }
     }
 
     function executeClearHistoryAction() {
         dbArchivedSales = []; persistAll(); renderReportView(); broadcastState();
         alert("Historial limpio."); globalActionPending = null;
+    }
+
+    // DISPARAR VENTANA DE PIN PARA ANULAR VENTA ACTIVA
+    function triggerCancelSale(saleId) {
+        if (!confirm("⚠️ ¿Deseas anular y borrar esta venta del turno actual? El dinero se descontará de caja.")) return;
+        pendingViewAccess = null; 
+        globalActionPending = "cancel_sale"; 
+        saleIdToCancel = saleId; 
+        openPinModal();
+    }
+
+    function executeCancelSaleAction() {
+        dbSales = dbSales.filter(s => s.id !== saleIdToCancel);
+        persistAll();
+        renderReportView();
+        broadcastState();
+        showToast("🗑 Venta anulada exitosamente del turno");
+        globalActionPending = null;
+        saleIdToCancel = null;
     }
 
     /* ═══════════════ FILTRADO DE MESAS ═══════════════ */
@@ -1267,10 +1298,6 @@
         document.getElementById("cart-subtotal").innerText = `S/ ${subtotal.toFixed(2)}`;
         let discountValue = table.discount > 0 ? (table.discountType === "fixed" ? table.discount : subtotal * (table.discount / 100)) : 0;
         document.getElementById("cart-total").innerText = `S/ ${Math.max(0, subtotal - discountValue).toFixed(2)}`;
-    }
-
-    function mergeTables() {
-        // Mantenido intacto por compatibilidad
     }
 
     function saveCurrentTableOrder() {
@@ -1536,10 +1563,22 @@
             let appendVueltoInfo = s.vueltoAmt > 0 && s.vueltoMethod === 'Yape' ? ` <span class="text-purple-600 font-bold block text-[10px]">(Vuelto Yape: S/ ${s.vueltoAmt.toFixed(2)})</span>` : '';
             let methodLabel = s.paymentMethod === 'Mixto' ? `Mixto (Efe: S/ ${s.splitCashAmt.toFixed(2)} + Yape: S/ ${s.splitDigitalAmt.toFixed(2)})` : s.paymentMethod;
             
-            tbody.innerHTML += `<tr><td class="p-3 text-xs text-gray-500 font-semibold">${s.time}</td><td class="p-3 font-bold">${escapeHtml(s.tableName)}</td><td class="p-3 text-xs truncate max-w-xs text-gray-700">${escapeHtml(s.itemsSummary)}${appendVueltoInfo}</td><td class="p-3 text-xs"><span class="bg-gray-100 font-bold px-2 py-0.5 rounded text-[11px] block text-center">${methodLabel}</span></td><td class="p-3 font-black text-right text-gray-900">S/ ${s.total.toFixed(2)}</td></tr>`;
+            tbody.innerHTML += `
+                <tr class="hover:bg-gray-50/50">
+                    <td class="p-3 text-xs text-gray-500 font-semibold">${s.time}</td>
+                    <td class="p-3 font-bold">${escapeHtml(s.tableName)}</td>
+                    <td class="p-3 text-xs truncate max-w-xs text-gray-700">${escapeHtml(s.itemsSummary)}${appendVueltoInfo}</td>
+                    <td class="p-3 text-xs"><span class="bg-gray-100 font-bold px-2 py-0.5 rounded text-[11px] block text-center">${methodLabel}</span></td>
+                    <td class="p-3 font-black text-right text-gray-900">S/ ${s.total.toFixed(2)}</td>
+                    <td class="p-3 text-center">
+                        <button onclick="triggerCancelSale('${s.id}')" class="text-red-500 hover:bg-red-50 px-2 py-1 rounded-lg text-xs font-bold transition">
+                            <i class="fa-solid fa-ban"></i> Anular
+                        </button>
+                    </td>
+                </tr>`;
         });
 
-        if (dbSales.filter(s => s.date === today).length === 0) tbody.innerHTML = `<tr><td colspan="5" class="text-center py-6 text-gray-400">No hay ventas registradas.</td></tr>`;
+        if (dbSales.filter(s => s.date === today).length === 0) tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-gray-400">No hay ventas registradas en este turno.</td></tr>`;
 
         const tbodyEgresos = document.getElementById("table-egresos-today"); tbodyEgresos.innerHTML = "";
         let totalEgresos = 0;
@@ -1574,7 +1613,7 @@
         const pWrap = document.getElementById("history-most-sold"); pWrap.innerHTML = "";
         
         if (!dbArchivedSales || dbArchivedSales.length === 0) {
-            dWrap.innerHTML = `<tr><td colspan="5" class="text-center py-6 text-gray-400 font-semibold">No hay registros acumulados.</td></tr>`;
+            dWrap.innerHTML = `<tr><td colspan="5" class="text-center py-6 text-gray-400 font-semibold">No hay cierres acumulados.</td></tr>`;
             mWrap.innerHTML = `<tr><td colspan="2" class="text-center py-4 text-gray-400 font-semibold">Sin registros.</td></tr>`;
             pWrap.innerHTML = `<p class="text-center py-4 text-gray-400 font-semibold">No hay datos de platos vendidos.</p>`;
             return;
@@ -1582,32 +1621,32 @@
 
         let dailyConsolidated = {};
         let months = {};
-        let globalProductsCount = {}; // Objeto acumulador para ranking
+        let globalProductsCount = {};
 
         dbArchivedSales.forEach(cierre => {
             if (cierre.fecha) {
                 const fecha = cierre.fecha;
                 if (!dailyConsolidated[fecha]) {
-                    dailyConsolidated[fecha] = { efectivo: 0, yape: 0, tarjeta: 0, totalNeto: 0, month: cierre.month };
+                    dailyConsolidated[fecha] = { efectivo: 0, yape: 0, tarjeta: 0, totalNeto: 0, month: cierre.month, products: [] };
                 }
                 dailyConsolidated[fecha].efectivo += (cierre.efectivo || 0);
                 dailyConsolidated[fecha].yape += (cierre.yape || 0);
                 dailyConsolidated[fecha].tarjeta += (cierre.tarjeta || 0);
                 dailyConsolidated[fecha].totalNeto += (cierre.totalNeto || 0);
                 
-                months[cierre.month] = (months[cierre.month] || 0) + (cierre.totalNeto || 0);
-
-                // Acumular cantidades del array del cierre diario si existe
-                if(cierre.products && Array.isArray(cierre.products)) {
+                if (cierre.products) {
+                    dailyConsolidated[fecha].products = [...dailyConsolidated[fecha].products, ...cierre.products];
                     cierre.products.forEach(p => {
                         globalProductsCount[p.name] = (globalProductsCount[p.name] || 0) + p.qty;
                     });
                 }
+                
+                months[cierre.month] = (months[cierre.month] || 0) + (cierre.totalNeto || 0);
             } 
             else if (cierre.date) {
                 const fecha = cierre.date;
                 if (!dailyConsolidated[fecha]) {
-                    dailyConsolidated[fecha] = { efectivo: 0, yape: 0, tarjeta: 0, totalNeto: 0, month: cierre.month };
+                    dailyConsolidated[fecha] = { efectivo: 0, yape: 0, tarjeta: 0, totalNeto: 0, month: cierre.month, products: [] };
                 }
                 
                 let efe = 0, yape = 0, tar = 0;
@@ -1624,27 +1663,34 @@
                 dailyConsolidated[fecha].tarjeta += tar;
                 dailyConsolidated[fecha].totalNeto += cierre.total;
                 
-                months[cierre.month] = (months[cierre.month] || 0) + cierre.total;
-
-                // Desglosar dinámicamente cierres en formato antiguo (Legacy)
                 if(cierre.itemsSummary) {
                     const parts = cierre.itemsSummary.replace(/\[Parcial\]\s*/g, "").split(", ");
                     parts.forEach(p => {
                         const m = p.match(/^(\d+)x\s+(.+)$/);
                         if(m) {
-                            globalProductsCount[m[2].trim()] = (globalProductsCount[m[2].trim()] || 0) + parseInt(m[1]);
+                            const q = parseInt(m[1]);
+                            const n = m[2].trim();
+                            dailyConsolidated[fecha].products.push({ name: n, qty: q });
+                            globalProductsCount[n] = (globalProductsCount[n] || 0) + q;
                         }
                     });
                 }
+                
+                months[cierre.month] = (months[cierre.month] || 0) + cierre.total;
             }
         });
+
+        // Guardamos temporalmente en el window para el modal de detalles
+        window._cachedDailyConsolidated = dailyConsolidated;
 
         // Renderizar tabla acumulada por fechas
         Object.keys(dailyConsolidated).forEach(fecha => {
             const data = dailyConsolidated[fecha];
             dWrap.innerHTML += `
-                <tr class="hover:bg-gray-50 text-gray-700 font-medium border-b border-gray-100">
-                    <td class="p-2.5 font-bold text-gray-900">${fecha}</td>
+                <tr onclick="showHistoryDateDetail('${fecha}')" class="hover:bg-orange-50/50 cursor-pointer text-gray-700 font-medium border-b border-gray-100 transition">
+                    <td class="p-2.5 font-bold text-gray-900 flex items-center gap-1.5">
+                        <i class="fa-solid fa-magnifying-glass-chart text-gray-400 text-[10px]"></i> ${fecha}
+                    </td>
                     <td class="p-2.5 text-right font-bold text-green-700">S/ ${data.efectivo.toFixed(2)}</td>
                     <td class="p-2.5 text-right font-bold text-blue-700">S/ ${data.yape.toFixed(2)}</td>
                     <td class="p-2.5 text-right font-bold text-purple-700">S/ ${data.tarjeta.toFixed(2)}</td>
@@ -1657,31 +1703,61 @@
             mWrap.innerHTML += `<tr><td class="p-1 capitalize">${m}</td><td class="p-1 text-right font-bold text-purple-600">S/ ${months[m].toFixed(2)}</td></tr>`;
         });
 
-        // Procesar y Renderizar Top 5 más vendidos
-        let sortedProducts = Object.keys(globalProductsCount).map(name => {
-            return { name: name, qty: globalProductsCount[name] };
-        }).sort((a,b) => b.qty - a.qty);
+        // Renderizar los 5 más vendidos
+        let sortable = [];
+        Object.keys(globalProductsCount).forEach(name => sortable.push({ name: name, qty: globalProductsCount[name] }));
+        sortable.sort((a, b) => b.qty - a.qty);
 
-        if(sortedProducts.length === 0) {
-            pWrap.innerHTML = `<p class="text-center py-4 text-gray-400">Sin datos de productos.</p>`;
+        const topFive = sortable.slice(0, 5);
+        if (topFive.length === 0) {
+            pWrap.innerHTML = `<p class="text-gray-400 text-center py-2">Sin datos de platos.</p>`;
         } else {
-            const top5 = sortedProducts.slice(0, 5);
-            const maxQty = top5[0].qty || 1; // Para calcular porcentajes de la barra
-
-            top5.forEach((p, idx) => {
-                const percent = Math.min(100, Math.max(8, (p.qty / maxQty) * 100));
+            const maxQty = topFive[0].qty || 1;
+            topFive.forEach((item, index) => {
+                const pct = Math.min(100, Math.max(10, (item.qty / maxQty) * 100));
                 pWrap.innerHTML += `
-                    <div class="space-y-1">
-                        <div class="flex justify-between font-semibold text-gray-700">
-                            <span class="truncate pr-2">${idx + 1}. ${escapeHtml(p.name)}</span>
-                            <span class="font-black text-orange-600">${p.qty} und.</span>
+                    <div>
+                        <div class="flex justify-between font-semibold mb-1">
+                            <span>${index+1}. ${escapeHtml(item.name)}</span>
+                            <span class="font-bold text-orange-600">${item.qty} und.</span>
                         </div>
-                        <div class="w-full bg-gray-100 h-2.5 rounded-full overflow-hidden">
-                            <div class="bg-orange-500 h-full rounded-full transition-all duration-500" style="width: ${percent}%"></div>
+                        <div class="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
+                            <div class="bg-gradient-to-r from-orange-400 to-amber-600 h-2 rounded-full" style="width: ${pct}%"></div>
                         </div>
                     </div>`;
             });
         }
+    }
+
+    // MOSTRAR EL MODAL CON EL DESGLOSE DE PRODUCTOS DEL DÍA SELECCIONADO
+    function showHistoryDateDetail(fecha) {
+        const data = window._cachedDailyConsolidated ? window._cachedDailyConsolidated[fecha] : null;
+        if (!data || !data.products || data.products.length === 0) {
+            alert(`No hay desglose de platos individuales guardados para el día ${fecha}.`);
+            return;
+        }
+
+        // Consolidar platos del día elegido
+        let totals = {};
+        data.products.forEach(p => { totals[p.name] = (totals[p.name] || 0) + p.qty; });
+
+        const listContainer = document.getElementById("history-detail-list");
+        listContainer.innerHTML = "";
+        document.getElementById("history-detail-date").innerText = `Ventas del Día: ${fecha}`;
+
+        Object.keys(totals).sort((a,b) => totals[b] - totals[a]).forEach(name => {
+            listContainer.innerHTML += `
+                <div class="flex justify-between items-center bg-gray-50 border p-2 rounded-xl text-xs font-semibold text-gray-700">
+                    <span class="truncate">${escapeHtml(name)}</span>
+                    <span class="bg-orange-100 text-orange-800 px-2.5 py-0.5 rounded-full font-bold shrink-0">${totals[name]} und.</span>
+                </div>`;
+        });
+
+        document.getElementById("modal-history-detail").classList.remove("hidden");
+    }
+
+    function closeHistoryDetailModal() {
+        document.getElementById("modal-history-detail").classList.add("hidden");
     }
 
     function renderAdminMenuTable() {
