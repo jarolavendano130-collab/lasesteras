@@ -353,16 +353,24 @@
                         <tbody id="history-by-day" class="divide-y divide-gray-100"></tbody>
                     </table>
                 </div>
-                <div class="bg-white p-4 rounded-xl shadow-sm border">
-                    <h4 class="font-bold text-gray-700 mb-3 text-xs uppercase tracking-wide"><i class="fa-solid fa-calendar-check text-purple-500 mr-1"></i> Rendimiento Mensual</h4>
-                    <div class="overflow-y-auto max-h-60 text-sm">
-                        <table class="w-full text-left">
-                            <tr class="bg-gray-50 font-semibold text-gray-500 text-xs">
-                                <th class="p-2">Mes</th>
-                                <th class="p-2 text-right">Total Acumulado</th>
-                            </tr>
-                            <tbody id="history-by-month" class="divide-y divide-gray-100"></tbody>
-                        </table>
+                <div class="space-y-6">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border">
+                        <h4 class="font-bold text-gray-700 mb-3 text-xs uppercase tracking-wide"><i class="fa-solid fa-calendar-check text-purple-500 mr-1"></i> Rendimiento Mensual</h4>
+                        <div class="overflow-y-auto max-h-40 text-sm">
+                            <table class="w-full text-left">
+                                <tr class="bg-gray-50 font-semibold text-gray-500 text-xs">
+                                    <th class="p-2">Mes</th>
+                                    <th class="p-2 text-right">Total Acumulado</th>
+                                </tr>
+                                <tbody id="history-by-month" class="divide-y divide-gray-100"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white p-4 rounded-xl shadow-sm border">
+                        <h4 class="font-bold text-gray-700 mb-3 text-xs uppercase tracking-wide"><i class="fa-solid fa-fire text-orange-500 mr-1"></i> Top 5 Más Vendidos</h4>
+                        <div id="history-most-sold" class="space-y-3 text-xs">
+                            </div>
                     </div>
                 </div>
             </div>
@@ -920,6 +928,8 @@
             let totalYape = 0;
             let totalTarjeta = 0;
 
+            // Conservar el desglose de productos vendidos en este turno dentro de un array plano para el historial
+            let turnoProductsList = [];
             dbSales.filter(s => s.date === todayString).forEach(s => {
                 if (s.paymentMethod === 'Efectivo') totalEfectivo += s.total;
                 else if (s.paymentMethod === 'Yape/Plin') totalYape += s.total;
@@ -927,6 +937,17 @@
                 else if (s.paymentMethod === 'Mixto') {
                     totalEfectivo += (s.splitCashAmt || 0);
                     totalYape += (s.splitDigitalAmt || 0);
+                }
+                
+                // Mapear los strings del resumen de items (Ej: "2x Porción de Chicharrón, 1x Jarra Chicha")
+                if(s.itemsSummary) {
+                    const parts = s.itemsSummary.replace(/\[Parcial\]\s*/g, "").split(", ");
+                    parts.forEach(p => {
+                        const m = p.match(/^(\d+)x\s+(.+)$/);
+                        if(m) {
+                            turnoProductsList.push({ name: m[2].trim(), qty: parseInt(m[1]) });
+                        }
+                    });
                 }
             });
 
@@ -936,7 +957,8 @@
                 efectivo: totalEfectivo,
                 yape: totalYape,
                 tarjeta: totalTarjeta,
-                totalNeto: totalEfectivo + totalYape + totalTarjeta
+                totalNeto: totalEfectivo + totalYape + totalTarjeta,
+                products: turnoProductsList // Guardamos los productos del día
             };
 
             dbArchivedSales.push(consolidadoDia);
@@ -1247,6 +1269,10 @@
         document.getElementById("cart-total").innerText = `S/ ${Math.max(0, subtotal - discountValue).toFixed(2)}`;
     }
 
+    function mergeTables() {
+        // Mantenido intacto por compatibilidad
+    }
+
     function saveCurrentTableOrder() {
         const table = dbTables.find(t => t.id === currentMesaId); if (!table) return;
         table.status = table.cart.length > 0 ? "OCUPADA" : "LIBRE";
@@ -1545,15 +1571,18 @@
     function renderArchivedTables() {
         const dWrap = document.getElementById("history-by-day"); dWrap.innerHTML = "";
         const mWrap = document.getElementById("history-by-month"); mWrap.innerHTML = "";
+        const pWrap = document.getElementById("history-most-sold"); pWrap.innerHTML = "";
         
         if (!dbArchivedSales || dbArchivedSales.length === 0) {
             dWrap.innerHTML = `<tr><td colspan="5" class="text-center py-6 text-gray-400 font-semibold">No hay registros acumulados.</td></tr>`;
             mWrap.innerHTML = `<tr><td colspan="2" class="text-center py-4 text-gray-400 font-semibold">Sin registros.</td></tr>`;
+            pWrap.innerHTML = `<p class="text-center py-4 text-gray-400 font-semibold">No hay datos de platos vendidos.</p>`;
             return;
         }
 
         let dailyConsolidated = {};
         let months = {};
+        let globalProductsCount = {}; // Objeto acumulador para ranking
 
         dbArchivedSales.forEach(cierre => {
             if (cierre.fecha) {
@@ -1567,6 +1596,13 @@
                 dailyConsolidated[fecha].totalNeto += (cierre.totalNeto || 0);
                 
                 months[cierre.month] = (months[cierre.month] || 0) + (cierre.totalNeto || 0);
+
+                // Acumular cantidades del array del cierre diario si existe
+                if(cierre.products && Array.isArray(cierre.products)) {
+                    cierre.products.forEach(p => {
+                        globalProductsCount[p.name] = (globalProductsCount[p.name] || 0) + p.qty;
+                    });
+                }
             } 
             else if (cierre.date) {
                 const fecha = cierre.date;
@@ -1589,9 +1625,21 @@
                 dailyConsolidated[fecha].totalNeto += cierre.total;
                 
                 months[cierre.month] = (months[cierre.month] || 0) + cierre.total;
+
+                // Desglosar dinámicamente cierres en formato antiguo (Legacy)
+                if(cierre.itemsSummary) {
+                    const parts = cierre.itemsSummary.replace(/\[Parcial\]\s*/g, "").split(", ");
+                    parts.forEach(p => {
+                        const m = p.match(/^(\d+)x\s+(.+)$/);
+                        if(m) {
+                            globalProductsCount[m[2].trim()] = (globalProductsCount[m[2].trim()] || 0) + parseInt(m[1]);
+                        }
+                    });
+                }
             }
         });
 
+        // Renderizar tabla acumulada por fechas
         Object.keys(dailyConsolidated).forEach(fecha => {
             const data = dailyConsolidated[fecha];
             dWrap.innerHTML += `
@@ -1604,9 +1652,36 @@
                 </tr>`;
         });
 
+        // Renderizar rendimiento mensual
         Object.keys(months).forEach(m => {
             mWrap.innerHTML += `<tr><td class="p-1 capitalize">${m}</td><td class="p-1 text-right font-bold text-purple-600">S/ ${months[m].toFixed(2)}</td></tr>`;
         });
+
+        // Procesar y Renderizar Top 5 más vendidos
+        let sortedProducts = Object.keys(globalProductsCount).map(name => {
+            return { name: name, qty: globalProductsCount[name] };
+        }).sort((a,b) => b.qty - a.qty);
+
+        if(sortedProducts.length === 0) {
+            pWrap.innerHTML = `<p class="text-center py-4 text-gray-400">Sin datos de productos.</p>`;
+        } else {
+            const top5 = sortedProducts.slice(0, 5);
+            const maxQty = top5[0].qty || 1; // Para calcular porcentajes de la barra
+
+            top5.forEach((p, idx) => {
+                const percent = Math.min(100, Math.max(8, (p.qty / maxQty) * 100));
+                pWrap.innerHTML += `
+                    <div class="space-y-1">
+                        <div class="flex justify-between font-semibold text-gray-700">
+                            <span class="truncate pr-2">${idx + 1}. ${escapeHtml(p.name)}</span>
+                            <span class="font-black text-orange-600">${p.qty} und.</span>
+                        </div>
+                        <div class="w-full bg-gray-100 h-2.5 rounded-full overflow-hidden">
+                            <div class="bg-orange-500 h-full rounded-full transition-all duration-500" style="width: ${percent}%"></div>
+                        </div>
+                    </div>`;
+            });
+        }
     }
 
     function renderAdminMenuTable() {
